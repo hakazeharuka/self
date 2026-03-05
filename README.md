@@ -12,11 +12,12 @@ bash <(curl -sSL https://github.com/hakazeharuka/self/raw/refs/heads/main/shell/
 
 **docker/Dockerfile**
 
-感谢https://blog.jelin-sh.com/archives/based-on-docker-s-c-z2rbvla提供参考
+感谢 https://blog.jelin-sh.com/archives/based-on-docker-s-c-z2rbvla 提供参考
 
 基于 Ubuntu 22.04 的开发环境，其中集成了C、C++、Go、Python、Rust的开发环境，使用以下命令构建镜像
 
 ```shell
 git clone https://github.com/hakazeharuka/self.git && cd self
 cd docker && docker buildx build . -t xxx/xxx:latest
+docker run -itd -v /workspace:/workspace -p 2222:22 xxx/xxx:latest
 ```

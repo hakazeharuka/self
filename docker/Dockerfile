@@ -13,7 +13,7 @@ ENV PYTHON_VERSION=3.12
 
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
-ENV PATH=$CARGO_HOME/bin:$PATH
+ENV PATH=$CARGO_HOME/bin:/root/.local/bin:$PATH
 
 RUN set -eux \
     && apt-get update \
@@ -24,7 +24,7 @@ RUN set -eux \
         sudo tini unzip valgrind wget zip texinfo gcc-multilib chrpath socat cpio xz-utils debianutils \
         patch perl tar rsync bc xterm whois software-properties-common apt-transport-https ca-certificates\
         dh-autoreconf apt-transport-https g++ graphviz xdot mesa-utils tclsh \
-    && exit 0
+    && rm -rf /var/lib/apt/lists/*
 
 # cmake
 RUN set -eux \
@@ -34,28 +34,30 @@ RUN set -eux \
     && /tmp/cmake-install.sh --skip-license --prefix=/opt/cmake-${CMAKE_VERSION} \
     && rm /tmp/cmake-install.sh \
     && ln -s /opt/cmake-${CMAKE_VERSION}/bin/* /usr/local/bin \
-    && cmake --version \
-    && exit 0
+    && cmake --version 
 
 # python
-RUN wget https://astral.sh/uv/install.sh -q -O /tmp/uv.sh \
-    && chmod u+x /tmp/cmake-install.sh \
-    && /tmp/cmake-install.sh \
-    && source /root/.local/bin/env \
-    && uv python install ${PYTHON_VERSION} \
-    && exit 0
+RUN set -eux \
+    && wget https://astral.sh/uv/install.sh -q -O /tmp/uv.sh \
+    && chmod u+x /tmp/uv.sh \
+    && bash /tmp/uv.sh \
+    && /root/.local/bin/uv python install ${PYTHON_VERSION} \
+    && /root/.local/bin/uv --version
 
 # go
-RUN wget -q https://golang.org/dl/go${GO_VERSION}.linux-amd64.tar.gz -O /tmp/go.tar.gz && \
-    tar -C /usr/local -xzf /tmp/go.tar.gz && \
-    rm /tmp/go.tar.gz && \
-    mkdir -p ${GOPATH}/src ${GOPATH}/bin ${GOPATH}/pkg
+RUN set -eux \
+    && wget -q https://golang.org/dl/go${GO_VERSION}.linux-amd64.tar.gz -O /tmp/go.tar.gz \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz \
+    && mkdir -p ${GOPATH}/src ${GOPATH}/bin ${GOPATH}/pkg \
+    && go version
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --default-toolchain stable --profile default && \
-    chmod -R a+rw $RUSTUP_HOME $CARGO_HOME
-
-WORKDIR /workspace
+# rust
+RUN set -eux \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+       sh -s -- -y --default-toolchain stable --profile default \
+    && chmod -R a+rw $RUSTUP_HOME $CARGO_HOME \
+    && rustc --version
 
 # ssh
 RUN set -eux \
@@ -63,8 +65,9 @@ RUN set -eux \
     && mkdir -p /root/.ssh \
     && sed -ri 's/^#?PermitRootLogin\s+.*/PermitRootLogin yes/' /etc/ssh/sshd_config \
     && sed -ri 's/UsePAM yes/#UsePAM yes/g' /etc/ssh/sshd_config \
-    && echo 'root:root' | chpasswd \
-    && exit 0
+    && echo 'root:root' | chpasswd 
+
+WORKDIR /workspace
 
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["/usr/sbin/sshd","-D","-e"]
