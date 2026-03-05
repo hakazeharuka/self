@@ -36,7 +36,7 @@ ask_password() {
 interactive_config() {
     echo ""
     echo -e "${BOLD}╔══════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}║    MySQL + Redis Docker 自动化部署向导       ║${NC}"
+    echo -e "${BOLD}║        Database Docker 自动化部署向导        ║${NC}"
     echo -e "${BOLD}╚══════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${YELLOW}提示: 直接按回车使用 [方括号] 中的默认值${NC}"
@@ -57,6 +57,11 @@ interactive_config() {
     ask      "Redis 版本"       "8.2.0"          REDIS_VERSION
     ask      "Redis 映射端口"   "6379"         REDIS_PORT
     ask_password "Redis 访问密码"   "Redis@123456" REDIS_PASSWORD
+    echo ""
+    
+    echo -e "  ${BOLD}── MongoDB 配置 ──${NC}"
+    ask      "MongoDB 版本"       "latest"          MONGO_VERSION
+    ask      "MongoDB 映射端口"   "27017"         MONGO_PORT
     echo ""
 
     MYSQL_DATA_DIR="${BASE_DIR}/mysql/data"
@@ -87,6 +92,10 @@ confirm_config() {
     echo "    访问密码:        ${REDIS_PASSWORD}"
     echo "    数据目录:        ${REDIS_DATA_DIR}"
     echo "    配置目录:        ${REDIS_CONF_DIR}"
+    echo ""
+    echo -e "  ${BOLD}MongoDB${NC}"
+    echo "    版本:            ${MONGO_VERSION}"
+    echo "    端口:            ${MONGO_PORT}"
     echo ""
     echo -e "  ${BOLD}────────────────────────────────────────────${NC}"
     echo ""
@@ -226,6 +235,17 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+  mongodb:
+    image: mongodb/mongodb-community-server:${MONGO_VERSION}
+    container_name: mongodb
+    restart: always
+    ports:
+      - "${MONGO_PORT}:27017"
+    environment:
+      TZ: Asia/Shanghai
+    networks:
+      - database-network
+     
 
 networks:
   database-network:
@@ -247,12 +267,13 @@ start_services() {
     local max_wait=30
     local waited=0
     while [ $waited -lt $max_wait ]; do
-        local mysql_ok=false redis_ok=false
+        local mysql_ok=false redis_ok=false mongo_ok=false
         docker exec mysql mysqladmin ping -h localhost -u root -p"${MYSQL_ROOT_PASSWORD}" &>/dev/null && mysql_ok=true
         docker exec redis redis-cli -a "${REDIS_PASSWORD}" ping &>/dev/null && redis_ok=true
-        if $mysql_ok && $redis_ok; then
+        docker exec mongodb mongosh --port 27017 &>/dev/null && mongo_ok=true
+        if $mysql_ok && $redis_ok && $mongo_ok; then
             echo ""
-            log_info "MySQL 和 Redis 均已就绪"
+            log_info "MySQL、Redis、MongoDB 均已就绪"
             return 0
         fi
         echo -ne "\r  等待中... ${waited}s / ${max_wait}s"
@@ -271,22 +292,25 @@ print_result() {
     echo ""
 
     echo -e "  ${BOLD}容器状态${NC}"
-    docker ps --filter "name=mysql" --filter "name=redis" \
+    docker ps --filter "name=mysql" --filter "name=redis" --filter "name=mongodb" \
         --format "    {{.Names}}	{{.Status}}	{{.Ports}}" 2>/dev/null || true
     echo ""
 
     echo -e "  ${BOLD}连接信息${NC}"
-    echo "    MySQL  →  localhost:${MYSQL_PORT}  用户: root  密码: ${MYSQL_ROOT_PASSWORD}"
-    echo "    Redis  →  localhost:${REDIS_PORT}  密码: ${REDIS_PASSWORD}"
+    echo "    MySQL   →  localhost:${MYSQL_PORT}  用户: root  密码: ${MYSQL_ROOT_PASSWORD}"
+    echo "    Redis   →  localhost:${REDIS_PORT}  密码: ${REDIS_PASSWORD}"
+    echo "    MongoDB →  localhost:${MONGO_PORT}" 
     echo ""
 
     echo -e "  ${BOLD}常用命令${NC}"
-    echo "    进入 MySQL:      docker exec -it mysql mysql -uroot -p'${MYSQL_ROOT_PASSWORD}'"
-    echo "    进入 Redis:      docker exec -it redis redis-cli -a '${REDIS_PASSWORD}'"
-    echo "    查看 MySQL 日志: docker logs -f mysql"
-    echo "    查看 Redis 日志: docker logs -f redis"
-    echo "    停止服务:        docker compose -p ${COMPOSE_PROJECT_NAME} down"
-    echo "    停止并删除数据:  docker compose -p ${COMPOSE_PROJECT_NAME} down -v && rm -rf ${BASE_DIR}"
+    echo "    进入 MySQL:         docker exec -it mysql mysql -uroot -p'${MYSQL_ROOT_PASSWORD}'"
+    echo "    进入 Redis:         docker exec -it redis redis-cli -a '${REDIS_PASSWORD}'"
+    echo "    进入 MongoDB:       docker exec -it mongodb mongosh --port 27017"
+    echo "    查看 MySQL 日志:    docker logs -f mysql"
+    echo "    查看 Redis 日志:    docker logs -f redis"
+    echo "    查看 MongoDB 日志:  docker logs -f mongodb"
+    echo "    停止服务:           docker compose -p ${COMPOSE_PROJECT_NAME} down"
+    echo "    停止并删除数据:     docker compose -p ${COMPOSE_PROJECT_NAME} down -v && rm -rf ${BASE_DIR}"
     echo ""
 }
 
@@ -296,6 +320,7 @@ main() {
     check_docker
     check_port "$MYSQL_PORT" "MySQL"
     check_port "$REDIS_PORT" "Redis"
+    check_port "$MONGO_PORT" "MongoDB"
     create_dirs
     create_mysql_conf
     create_redis_conf
