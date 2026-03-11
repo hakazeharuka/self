@@ -9,6 +9,11 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# 安装选项标志
+INSTALL_MYSQL=false
+INSTALL_REDIS=false
+INSTALL_MONGODB=false
+
 log_info()  { echo -e "${GREEN}[√] $1${NC}"; }
 log_warn()  { echo -e "${YELLOW}[!] $1${NC}"; }
 log_error() { echo -e "${RED}[x] $1${NC}"; }
@@ -33,7 +38,22 @@ ask_password() {
     eval "$varname='${input:-$default}'"
 }
 
-interactive_config() {
+ask_yes_no() {
+    local prompt="$1"
+    local default="$2"
+    local varname="$3"
+    local input
+    echo -ne "  ${CYAN}${prompt}${NC} ${BOLD}[${default}]${NC}: "
+    read -r input
+    input="${input:-$default}"
+    if [[ "$input" =~ ^[Yy]$ ]]; then
+        eval "$varname=true"
+    else
+        eval "$varname=false"
+    fi
+}
+
+select_components() {
     echo ""
     echo -e "${BOLD}╔══════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}║        Database Docker 自动化部署向导        ║${NC}"
@@ -41,34 +61,62 @@ interactive_config() {
     echo ""
     echo -e "  ${YELLOW}提示: 直接按回车使用 [方括号] 中的默认值${NC}"
     echo ""
+    
+    echo -e "  ${BOLD}── 选择要安装的组件 ──${NC}"
+    echo ""
+    ask_yes_no "安装 MySQL？(Y/n)" "Y" INSTALL_MYSQL
+    ask_yes_no "安装 Redis？(Y/n)" "Y" INSTALL_REDIS
+    ask_yes_no "安装 MongoDB？(Y/n)" "Y" INSTALL_MONGODB
+    echo ""
+    
+    # 检查是否至少选择了一个组件
+    if ! $INSTALL_MYSQL && ! $INSTALL_REDIS && ! $INSTALL_MONGODB; then
+        log_error "至少需要选择一个组件进行安装！"
+        exit 1
+    fi
+    
+    echo -e "  ${GREEN}已选择安装:${NC}"
+    $INSTALL_MYSQL && echo -e "    ${CYAN}✓ MySQL${NC}"
+    $INSTALL_REDIS && echo -e "    ${CYAN}✓ Redis${NC}"
+    $INSTALL_MONGODB && echo -e "    ${CYAN}✓ MongoDB${NC}"
+    echo ""
+}
 
-
+interactive_config() {
     echo -e "  ${BOLD}── 通用配置 ──${NC}"
     ask "数据持久化根目录" "$(pwd)/database-data" BASE_DIR
     echo ""
 
-    echo -e "  ${BOLD}── MySQL 配置 ──${NC}"
-    ask      "MySQL 版本"       "8"          MYSQL_VERSION
-    ask      "MySQL 映射端口"   "3306"         MYSQL_PORT
-    ask_password "MySQL root 密码"  "Root@123456"  MYSQL_ROOT_PASSWORD
-    echo ""
+    if $INSTALL_MYSQL; then
+        echo -e "  ${BOLD}── MySQL 配置 ──${NC}"
+        ask      "MySQL 版本"       "8"          MYSQL_VERSION
+        ask      "MySQL 映射端口"   "3306"         MYSQL_PORT
+        ask_password "MySQL root 密码"  "Root@123456"  MYSQL_ROOT_PASSWORD
+        echo ""
+        
+        MYSQL_DATA_DIR="${BASE_DIR}/mysql/data"
+        MYSQL_CONF_DIR="${BASE_DIR}/mysql/conf"
+        MYSQL_LOG_DIR="${BASE_DIR}/mysql/logs"
+    fi
 
-    echo -e "  ${BOLD}── Redis 配置 ──${NC}"
-    ask      "Redis 版本"       "8.2.0"          REDIS_VERSION
-    ask      "Redis 映射端口"   "6379"         REDIS_PORT
-    ask_password "Redis 访问密码"   "Redis@123456" REDIS_PASSWORD
-    echo ""
+    if $INSTALL_REDIS; then
+        echo -e "  ${BOLD}── Redis 配置 ──${NC}"
+        ask      "Redis 版本"       "8.2.0"          REDIS_VERSION
+        ask      "Redis 映射端口"   "6379"         REDIS_PORT
+        ask_password "Redis 访问密码"   "Redis@123456" REDIS_PASSWORD
+        echo ""
+        
+        REDIS_DATA_DIR="${BASE_DIR}/redis/data"
+        REDIS_CONF_DIR="${BASE_DIR}/redis/conf"
+    fi
     
-    echo -e "  ${BOLD}── MongoDB 配置 ──${NC}"
-    ask      "MongoDB 版本"       "latest"          MONGO_VERSION
-    ask      "MongoDB 映射端口"   "27017"         MONGO_PORT
-    echo ""
+    if $INSTALL_MONGODB; then
+        echo -e "  ${BOLD}── MongoDB 配置 ──${NC}"
+        ask      "MongoDB 版本"       "latest"          MONGO_VERSION
+        ask      "MongoDB 映射端口"   "27017"         MONGO_PORT
+        echo ""
+    fi
 
-    MYSQL_DATA_DIR="${BASE_DIR}/mysql/data"
-    MYSQL_CONF_DIR="${BASE_DIR}/mysql/conf"
-    MYSQL_LOG_DIR="${BASE_DIR}/mysql/logs"
-    REDIS_DATA_DIR="${BASE_DIR}/redis/data"
-    REDIS_CONF_DIR="${BASE_DIR}/redis/conf"
     COMPOSE_PROJECT_NAME="auto-database"
 }
 
@@ -78,25 +126,35 @@ confirm_config() {
     echo -e "  ${BOLD}通用${NC}"
     echo "    数据根目录:      ${BASE_DIR}"
     echo ""
-    echo -e "  ${BOLD}MySQL${NC}"
-    echo "    版本:            ${MYSQL_VERSION}"
-    echo "    端口:            ${MYSQL_PORT}"
-    echo "    root 密码:       ${MYSQL_ROOT_PASSWORD}"
-    echo "    数据目录:        ${MYSQL_DATA_DIR}"
-    echo "    配置目录:        ${MYSQL_CONF_DIR}"
-    echo "    日志目录:        ${MYSQL_LOG_DIR}"
-    echo ""
-    echo -e "  ${BOLD}Redis${NC}"
-    echo "    版本:            ${REDIS_VERSION}"
-    echo "    端口:            ${REDIS_PORT}"
-    echo "    访问密码:        ${REDIS_PASSWORD}"
-    echo "    数据目录:        ${REDIS_DATA_DIR}"
-    echo "    配置目录:        ${REDIS_CONF_DIR}"
-    echo ""
-    echo -e "  ${BOLD}MongoDB${NC}"
-    echo "    版本:            ${MONGO_VERSION}"
-    echo "    端口:            ${MONGO_PORT}"
-    echo ""
+    
+    if $INSTALL_MYSQL; then
+        echo -e "  ${BOLD}MySQL${NC}"
+        echo "    版本:            ${MYSQL_VERSION}"
+        echo "    端口:            ${MYSQL_PORT}"
+        echo "    root 密码:       ${MYSQL_ROOT_PASSWORD}"
+        echo "    数据目录:        ${MYSQL_DATA_DIR}"
+        echo "    配置目录:        ${MYSQL_CONF_DIR}"
+        echo "    日志目录:        ${MYSQL_LOG_DIR}"
+        echo ""
+    fi
+    
+    if $INSTALL_REDIS; then
+        echo -e "  ${BOLD}Redis${NC}"
+        echo "    版本:            ${REDIS_VERSION}"
+        echo "    端口:            ${REDIS_PORT}"
+        echo "    访问密码:        ${REDIS_PASSWORD}"
+        echo "    数据目录:        ${REDIS_DATA_DIR}"
+        echo "    配置目录:        ${REDIS_CONF_DIR}"
+        echo ""
+    fi
+    
+    if $INSTALL_MONGODB; then
+        echo -e "  ${BOLD}MongoDB${NC}"
+        echo "    版本:            ${MONGO_VERSION}"
+        echo "    端口:            ${MONGO_PORT}"
+        echo ""
+    fi
+    
     echo -e "  ${BOLD}────────────────────────────────────────────${NC}"
     echo ""
 
@@ -132,13 +190,27 @@ check_port() {
     fi
 }
 
+check_ports() {
+    $INSTALL_MYSQL && check_port "$MYSQL_PORT" "MySQL"
+    $INSTALL_REDIS && check_port "$REDIS_PORT" "Redis"
+    $INSTALL_MONGODB && check_port "$MONGO_PORT" "MongoDB"
+}
+
 create_dirs() {
-    mkdir -p "$MYSQL_DATA_DIR" "$MYSQL_CONF_DIR" "$MYSQL_LOG_DIR"
-    mkdir -p "$REDIS_DATA_DIR" "$REDIS_CONF_DIR"
+    if $INSTALL_MYSQL; then
+        mkdir -p "$MYSQL_DATA_DIR" "$MYSQL_CONF_DIR" "$MYSQL_LOG_DIR"
+    fi
+    if $INSTALL_REDIS; then
+        mkdir -p "$REDIS_DATA_DIR" "$REDIS_CONF_DIR"
+    fi
     log_info "数据目录创建完成"
 }
 
 create_mysql_conf() {
+    if ! $INSTALL_MYSQL; then
+        return
+    fi
+    
     cat > "$MYSQL_CONF_DIR/my.cnf" <<'EOF'
 
 [mysqld]
@@ -161,6 +233,10 @@ EOF
 }
 
 create_redis_conf() {
+    if ! $INSTALL_REDIS; then
+        return
+    fi
+    
     cat > "$REDIS_CONF_DIR/redis.conf" <<EOF
 bind 0.0.0.0
 protected-mode yes
@@ -185,22 +261,27 @@ EOF
 }
 
 create_compose_file() {
-    local abs_mysql_data abs_mysql_conf abs_mysql_log abs_redis_data abs_redis_conf
-    abs_mysql_data="$(cd "$MYSQL_DATA_DIR" && pwd)"
-    abs_mysql_conf="$(cd "$MYSQL_CONF_DIR" && pwd)"
-    abs_mysql_log="$(cd "$MYSQL_LOG_DIR" && pwd)"
-    abs_redis_data="$(cd "$REDIS_DATA_DIR" && pwd)"
-    abs_redis_conf="$(cd "$REDIS_CONF_DIR" && pwd)"
+    local compose_content=""
+    local services_to_check=""
+    
+    # 开始构建 compose 文件
+    compose_content="
+services:"
 
-    cat > docker-compose.yml <<EOF
-
-services:
+    # MySQL 服务配置
+    if $INSTALL_MYSQL; then
+        local abs_mysql_data abs_mysql_conf abs_mysql_log
+        abs_mysql_data="$(cd "$MYSQL_DATA_DIR" && pwd)"
+        abs_mysql_conf="$(cd "$MYSQL_CONF_DIR" && pwd)"
+        abs_mysql_log="$(cd "$MYSQL_LOG_DIR" && pwd)"
+        
+        compose_content+="
   mysql:
     image: mysql:${MYSQL_VERSION}
     container_name: mysql
     restart: always
     ports:
-      - "${MYSQL_PORT}:3306"
+      - \"${MYSQL_PORT}:3306\"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       TZ: Asia/Shanghai
@@ -211,17 +292,25 @@ services:
     networks:
       - database-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      test: [\"CMD\", \"mysqladmin\", \"ping\", \"-h\", \"localhost\", \"-u\", \"root\", \"-p${MYSQL_ROOT_PASSWORD}\"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 5"
+    fi
 
+    # Redis 服务配置
+    if $INSTALL_REDIS; then
+        local abs_redis_data abs_redis_conf
+        abs_redis_data="$(cd "$REDIS_DATA_DIR" && pwd)"
+        abs_redis_conf="$(cd "$REDIS_CONF_DIR" && pwd)"
+        
+        compose_content+="
   redis:
     image: redis:${REDIS_VERSION}
     container_name: redis
     restart: always
     ports:
-      - "${REDIS_PORT}:6379"
+      - \"${REDIS_PORT}:6379\"
     environment:
       TZ: Asia/Shanghai
     volumes:
@@ -231,26 +320,36 @@ services:
     networks:
       - database-network
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: [\"CMD\", \"redis-cli\", \"-a\", \"${REDIS_PASSWORD}\", \"ping\"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 5"
+    fi
+
+    # MongoDB 服务配置
+    if $INSTALL_MONGODB; then
+        compose_content+="
   mongodb:
     image: mongodb/mongodb-community-server:${MONGO_VERSION}
     container_name: mongodb
     restart: always
     ports:
-      - "${MONGO_PORT}:27017"
+      - \"${MONGO_PORT}:27017\"
     environment:
       TZ: Asia/Shanghai
     networks:
-      - database-network
-     
+      - database-network"
+    fi
+
+    # 网络配置
+    compose_content+="
 
 networks:
   database-network:
     driver: bridge
-EOF
+"
+
+    echo "$compose_content" > docker-compose.yml
     log_info "docker-compose.yml 生成完成"
 }
 
@@ -267,13 +366,30 @@ start_services() {
     local max_wait=30
     local waited=0
     while [ $waited -lt $max_wait ]; do
-        local mysql_ok=false redis_ok=false mongo_ok=false
-        docker exec mysql mysqladmin ping -h localhost -u root -p"${MYSQL_ROOT_PASSWORD}" &>/dev/null && mysql_ok=true
-        docker exec redis redis-cli -a "${REDIS_PASSWORD}" ping &>/dev/null && redis_ok=true
-        docker exec mongodb mongosh --port 27017 &>/dev/null && mongo_ok=true
+        local mysql_ok=true redis_ok=true mongo_ok=true
+        
+        if $INSTALL_MYSQL; then
+            mysql_ok=false
+            docker exec mysql mysqladmin ping -h localhost -u root -p"${MYSQL_ROOT_PASSWORD}" &>/dev/null && mysql_ok=true
+        fi
+        
+        if $INSTALL_REDIS; then
+            redis_ok=false
+            docker exec redis redis-cli -a "${REDIS_PASSWORD}" ping &>/dev/null && redis_ok=true
+        fi
+        
+        if $INSTALL_MONGODB; then
+            mongo_ok=false
+            docker exec mongodb mongosh --port 27017 --eval "db.runCommand({ping:1})" &>/dev/null && mongo_ok=true
+        fi
+        
         if $mysql_ok && $redis_ok && $mongo_ok; then
             echo ""
-            log_info "MySQL、Redis、MongoDB 均已就绪"
+            local ready_services=""
+            $INSTALL_MYSQL && ready_services+="MySQL "
+            $INSTALL_REDIS && ready_services+="Redis "
+            $INSTALL_MONGODB && ready_services+="MongoDB "
+            log_info "${ready_services}均已就绪"
             return 0
         fi
         echo -ne "\r  等待中... ${waited}s / ${max_wait}s"
@@ -292,35 +408,120 @@ print_result() {
     echo ""
 
     echo -e "  ${BOLD}容器状态${NC}"
-    docker ps --filter "name=mysql" --filter "name=redis" --filter "name=mongodb" \
-        --format "    {{.Names}}	{{.Status}}	{{.Ports}}" 2>/dev/null || true
+    local filter_args=""
+    $INSTALL_MYSQL && filter_args+="--filter name=mysql "
+    $INSTALL_REDIS && filter_args+="--filter name=redis "
+    $INSTALL_MONGODB && filter_args+="--filter name=mongodb "
+    docker ps $filter_args --format "    {{.Names}}	{{.Status}}	{{.Ports}}" 2>/dev/null || true
     echo ""
 
     echo -e "  ${BOLD}连接信息${NC}"
-    echo "    MySQL   →  localhost:${MYSQL_PORT}  用户: root  密码: ${MYSQL_ROOT_PASSWORD}"
-    echo "    Redis   →  localhost:${REDIS_PORT}  密码: ${REDIS_PASSWORD}"
-    echo "    MongoDB →  localhost:${MONGO_PORT}" 
+    $INSTALL_MYSQL && echo "    MySQL   →  localhost:${MYSQL_PORT}  用户: root  密码: ${MYSQL_ROOT_PASSWORD}"
+    $INSTALL_REDIS && echo "    Redis   →  localhost:${REDIS_PORT}  密码: ${REDIS_PASSWORD}"
+    $INSTALL_MONGODB && echo "    MongoDB →  localhost:${MONGO_PORT}"
     echo ""
 
     echo -e "  ${BOLD}常用命令${NC}"
-    echo "    进入 MySQL:         docker exec -it mysql mysql -uroot -p'${MYSQL_ROOT_PASSWORD}'"
-    echo "    进入 Redis:         docker exec -it redis redis-cli -a '${REDIS_PASSWORD}'"
-    echo "    进入 MongoDB:       docker exec -it mongodb mongosh --port 27017"
-    echo "    查看 MySQL 日志:    docker logs -f mysql"
-    echo "    查看 Redis 日志:    docker logs -f redis"
-    echo "    查看 MongoDB 日志:  docker logs -f mongodb"
+    if $INSTALL_MYSQL; then
+        echo "    进入 MySQL:         docker exec -it mysql mysql -uroot -p'${MYSQL_ROOT_PASSWORD}'"
+        echo "    查看 MySQL 日志:    docker logs -f mysql"
+    fi
+    if $INSTALL_REDIS; then
+        echo "    进入 Redis:         docker exec -it redis redis-cli -a '${REDIS_PASSWORD}'"
+        echo "    查看 Redis 日志:    docker logs -f redis"
+    fi
+    if $INSTALL_MONGODB; then
+        echo "    进入 MongoDB:       docker exec -it mongodb mongosh --port 27017"
+        echo "    查看 MongoDB 日志:  docker logs -f mongodb"
+    fi
     echo "    停止服务:           docker compose -p ${COMPOSE_PROJECT_NAME} down"
     echo "    停止并删除数据:     docker compose -p ${COMPOSE_PROJECT_NAME} down -v && rm -rf ${BASE_DIR}"
     echo ""
 }
 
+show_help() {
+    echo ""
+    echo -e "${BOLD}Database Docker 自动化部署脚本${NC}"
+    echo ""
+    echo "用法: $0 [选项]"
+    echo ""
+    echo "选项:"
+    echo "  -h, --help          显示帮助信息"
+    echo "  -m, --mysql         只安装 MySQL"
+    echo "  -r, --redis         只安装 Redis"
+    echo "  -g, --mongodb       只安装 MongoDB"
+    echo "  -a, --all           安装所有组件 (MySQL + Redis + MongoDB)"
+    echo ""
+    echo "示例:"
+    echo "  $0                  交互式选择要安装的组件"
+    echo "  $0 -m               只安装 MySQL"
+    echo "  $0 -m -r            安装 MySQL 和 Redis"
+    echo "  $0 --all            安装所有组件"
+    echo ""
+}
+
+parse_args() {
+    local has_component_flag=false
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -m|--mysql)
+                INSTALL_MYSQL=true
+                has_component_flag=true
+                shift
+                ;;
+            -r|--redis)
+                INSTALL_REDIS=true
+                has_component_flag=true
+                shift
+                ;;
+            -g|--mongodb)
+                INSTALL_MONGODB=true
+                has_component_flag=true
+                shift
+                ;;
+            -a|--all)
+                INSTALL_MYSQL=true
+                INSTALL_REDIS=true
+                INSTALL_MONGODB=true
+                has_component_flag=true
+                shift
+                ;;
+            *)
+                log_error "未知选项: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # 如果没有通过命令行指定组件，则进入交互式选择
+    if ! $has_component_flag; then
+        select_components
+    else
+        echo ""
+        echo -e "${BOLD}╔══════════════════════════════════════════════╗${NC}"
+        echo -e "${BOLD}║        Database Docker 自动化部署向导        ║${NC}"
+        echo -e "${BOLD}╚══════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "  ${GREEN}已选择安装:${NC}"
+        $INSTALL_MYSQL && echo -e "    ${CYAN}✓ MySQL${NC}"
+        $INSTALL_REDIS && echo -e "    ${CYAN}✓ Redis${NC}"
+        $INSTALL_MONGODB && echo -e "    ${CYAN}✓ MongoDB${NC}"
+        echo ""
+    fi
+}
+
 main() {
+    parse_args "$@"
     interactive_config
     confirm_config
     check_docker
-    check_port "$MYSQL_PORT" "MySQL"
-    check_port "$REDIS_PORT" "Redis"
-    check_port "$MONGO_PORT" "MongoDB"
+    check_ports
     create_dirs
     create_mysql_conf
     create_redis_conf
@@ -329,4 +530,4 @@ main() {
     print_result
 }
 
-main
+main "$@"
