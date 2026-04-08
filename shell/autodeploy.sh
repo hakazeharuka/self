@@ -13,6 +13,7 @@ NC='\033[0m'
 INSTALL_MYSQL=false
 INSTALL_REDIS=false
 INSTALL_MONGODB=false
+INSTALL_POSTGRESQL=false
 
 log_info()  { echo -e "${GREEN}[√] $1${NC}"; }
 log_warn()  { echo -e "${YELLOW}[!] $1${NC}"; }
@@ -67,10 +68,11 @@ select_components() {
     ask_yes_no "安装 MySQL？(Y/n)" "Y" INSTALL_MYSQL
     ask_yes_no "安装 Redis？(Y/n)" "Y" INSTALL_REDIS
     ask_yes_no "安装 MongoDB？(Y/n)" "Y" INSTALL_MONGODB
+    ask_yes_no "安装 PostgreSQL？(Y/n)" "Y" INSTALL_POSTGRESQL
     echo ""
     
     # 检查是否至少选择了一个组件
-    if ! $INSTALL_MYSQL && ! $INSTALL_REDIS && ! $INSTALL_MONGODB; then
+    if ! $INSTALL_MYSQL && ! $INSTALL_REDIS && ! $INSTALL_MONGODB && ! $INSTALL_POSTGRESQL; then
         log_error "至少需要选择一个组件进行安装！"
         exit 1
     fi
@@ -79,6 +81,7 @@ select_components() {
     $INSTALL_MYSQL && echo -e "    ${CYAN}✓ MySQL${NC}"
     $INSTALL_REDIS && echo -e "    ${CYAN}✓ Redis${NC}"
     $INSTALL_MONGODB && echo -e "    ${CYAN}✓ MongoDB${NC}"
+    $INSTALL_POSTGRESQL && echo -e "    ${CYAN}✓ PostgreSQL${NC}"
     echo ""
 }
 
@@ -117,6 +120,16 @@ interactive_config() {
         echo ""
     fi
 
+    if $INSTALL_POSTGRESQL; then
+        echo -e "  ${BOLD}── PostgreSQL 配置 ──${NC}"
+        ask      "PostgreSQL 版本"       "17"                PG_VERSION
+        ask      "PostgreSQL 映射端口"   "5432"              PG_PORT
+        ask_password "PostgreSQL 超级用户密码" "Postgres@123456"  PG_PASSWORD
+        echo ""
+
+        PG_DATA_DIR="${BASE_DIR}/postgresql/data"
+    fi
+
     COMPOSE_PROJECT_NAME="auto-database"
 }
 
@@ -152,6 +165,15 @@ confirm_config() {
         echo -e "  ${BOLD}MongoDB${NC}"
         echo "    版本:            ${MONGO_VERSION}"
         echo "    端口:            ${MONGO_PORT}"
+        echo ""
+    fi
+
+    if $INSTALL_POSTGRESQL; then
+        echo -e "  ${BOLD}PostgreSQL${NC}"
+        echo "    版本:            ${PG_VERSION}"
+        echo "    端口:            ${PG_PORT}"
+        echo "    超级用户密码:    ${PG_PASSWORD}"
+        echo "    数据目录:        ${PG_DATA_DIR}"
         echo ""
     fi
     
@@ -194,6 +216,7 @@ check_ports() {
     $INSTALL_MYSQL && check_port "$MYSQL_PORT" "MySQL"
     $INSTALL_REDIS && check_port "$REDIS_PORT" "Redis"
     $INSTALL_MONGODB && check_port "$MONGO_PORT" "MongoDB"
+    $INSTALL_POSTGRESQL && check_port "$PG_PORT" "PostgreSQL"
 }
 
 create_dirs() {
@@ -202,6 +225,9 @@ create_dirs() {
     fi
     if $INSTALL_REDIS; then
         mkdir -p "$REDIS_DATA_DIR" "$REDIS_CONF_DIR"
+    fi
+    if $INSTALL_POSTGRESQL; then
+        mkdir -p "$PG_DATA_DIR"
     fi
     log_info "数据目录创建完成"
 }
@@ -341,6 +367,33 @@ services:"
       - database-network"
     fi
 
+    # PostgreSQL 服务配置
+    if $INSTALL_POSTGRESQL; then
+        local abs_pg_data
+        abs_pg_data="$(cd "$PG_DATA_DIR" && pwd)"
+
+        compose_content+="
+  postgresql:
+    image: postgres:${PG_VERSION}
+    container_name: postgresql
+    restart: always
+    ports:
+      - \"${PG_PORT}:5432\"
+    environment:
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      TZ: Asia/Shanghai
+      PGTZ: Asia/Shanghai
+    volumes:
+      - ${abs_pg_data}:/var/lib/postgresql
+    networks:
+      - database-network
+    healthcheck:
+      test: [\"CMD-SHELL\", \"pg_isready -U postgres\"]
+      interval: 10s
+      timeout: 5s
+      retries: 5"
+    fi
+
     # 网络配置
     compose_content+="
 
@@ -366,7 +419,7 @@ start_services() {
     local max_wait=30
     local waited=0
     while [ $waited -lt $max_wait ]; do
-        local mysql_ok=true redis_ok=true mongo_ok=true
+        local mysql_ok=true redis_ok=true mongo_ok=true pg_ok=true
         
         if $INSTALL_MYSQL; then
             mysql_ok=false
@@ -382,13 +435,19 @@ start_services() {
             mongo_ok=false
             docker exec mongodb mongosh --port 27017 --eval "db.runCommand({ping:1})" &>/dev/null && mongo_ok=true
         fi
-        
-        if $mysql_ok && $redis_ok && $mongo_ok; then
+
+        if $INSTALL_POSTGRESQL; then
+            pg_ok=false
+            docker exec postgresql pg_isready -U postgres &>/dev/null && pg_ok=true
+        fi
+
+        if $mysql_ok && $redis_ok && $mongo_ok && $pg_ok; then
             echo ""
             local ready_services=""
             $INSTALL_MYSQL && ready_services+="MySQL "
             $INSTALL_REDIS && ready_services+="Redis "
             $INSTALL_MONGODB && ready_services+="MongoDB "
+            $INSTALL_POSTGRESQL && ready_services+="PostgreSQL "
             log_info "${ready_services}均已就绪"
             return 0
         fi
@@ -412,6 +471,7 @@ print_result() {
     $INSTALL_MYSQL && filter_args+="--filter name=mysql "
     $INSTALL_REDIS && filter_args+="--filter name=redis "
     $INSTALL_MONGODB && filter_args+="--filter name=mongodb "
+    $INSTALL_POSTGRESQL && filter_args+="--filter name=postgresql "
     docker ps $filter_args --format "    {{.Names}}	{{.Status}}	{{.Ports}}" 2>/dev/null || true
     echo ""
 
@@ -419,6 +479,7 @@ print_result() {
     $INSTALL_MYSQL && echo "    MySQL   →  localhost:${MYSQL_PORT}  用户: root  密码: ${MYSQL_ROOT_PASSWORD}"
     $INSTALL_REDIS && echo "    Redis   →  localhost:${REDIS_PORT}  密码: ${REDIS_PASSWORD}"
     $INSTALL_MONGODB && echo "    MongoDB →  localhost:${MONGO_PORT}"
+    $INSTALL_POSTGRESQL && echo "    PostgreSQL →  localhost:${PG_PORT}  用户: postgres  密码: ${PG_PASSWORD}"
     echo ""
 
     echo -e "  ${BOLD}常用命令${NC}"
@@ -433,6 +494,10 @@ print_result() {
     if $INSTALL_MONGODB; then
         echo "    进入 MongoDB:       docker exec -it mongodb mongosh --port 27017"
         echo "    查看 MongoDB 日志:  docker logs -f mongodb"
+    fi
+    if $INSTALL_POSTGRESQL; then
+        echo "    进入 PostgreSQL:    docker exec -it postgresql psql -U postgres"
+        echo "    查看 PostgreSQL 日志: docker logs -f postgresql"
     fi
     echo "    停止服务:           docker compose -p ${COMPOSE_PROJECT_NAME} down"
     echo "    停止并删除数据:     docker compose -p ${COMPOSE_PROJECT_NAME} down -v && rm -rf ${BASE_DIR}"
@@ -450,7 +515,8 @@ show_help() {
     echo "  -m, --mysql         只安装 MySQL"
     echo "  -r, --redis         只安装 Redis"
     echo "  -g, --mongodb       只安装 MongoDB"
-    echo "  -a, --all           安装所有组件 (MySQL + Redis + MongoDB)"
+    echo "  -p, --postgresql    只安装 PostgreSQL"
+    echo "  -a, --all           安装所有组件 (MySQL + Redis + MongoDB + PostgreSQL)"
     echo ""
     echo "示例:"
     echo "  $0                  交互式选择要安装的组件"
@@ -484,10 +550,16 @@ parse_args() {
                 has_component_flag=true
                 shift
                 ;;
+            -p|--postgresql)
+                INSTALL_POSTGRESQL=true
+                has_component_flag=true
+                shift
+                ;;
             -a|--all)
                 INSTALL_MYSQL=true
                 INSTALL_REDIS=true
                 INSTALL_MONGODB=true
+                INSTALL_POSTGRESQL=true
                 has_component_flag=true
                 shift
                 ;;
@@ -512,6 +584,7 @@ parse_args() {
         $INSTALL_MYSQL && echo -e "    ${CYAN}✓ MySQL${NC}"
         $INSTALL_REDIS && echo -e "    ${CYAN}✓ Redis${NC}"
         $INSTALL_MONGODB && echo -e "    ${CYAN}✓ MongoDB${NC}"
+        $INSTALL_POSTGRESQL && echo -e "    ${CYAN}✓ PostgreSQL${NC}"
         echo ""
     fi
 }
